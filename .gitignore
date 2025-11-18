@@ -1,0 +1,9 @@
+# Cleanup log files
+cleanup-log-*.txt
+
+# macOS
+.DS_Store
+
+# Editor directories
+.vscode/
+.idea/
