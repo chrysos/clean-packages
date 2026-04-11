@@ -145,7 +145,11 @@ clean_caches() {
             total_freed=$((total_freed + npm_cache_size))
             cache_log+="[DRY RUN] npm cache: $(format_size $npm_cache_size)\n"
         else
+            local npm_cache_dir=$(npm config get cache 2>/dev/null)
             npm cache clean --force 2>&1 | grep -v "^npm"
+            if [[ -d "$npm_cache_dir" ]]; then
+                rm -rf "$npm_cache_dir"
+            fi
             echo -e "  ${GREEN}[✓]${NC} Cache do npm limpo"
             cache_log+="[SUCESSO] npm cache limpo\n"
         fi
@@ -176,6 +180,7 @@ clean_caches() {
     echo ""
 
     # Limpar cache do yarn
+    local yarn_orphan_dir="$HOME/Library/Caches/Yarn"
     if command -v yarn &> /dev/null; then
         echo -e "${CYAN}Limpando cache do yarn...${NC}"
         if [[ "$DRY_RUN" == true ]]; then
@@ -191,8 +196,84 @@ clean_caches() {
             echo -e "  ${GREEN}[✓]${NC} Cache do yarn limpo"
             cache_log+="[SUCESSO] yarn cache limpo\n"
         fi
+    elif [[ -d "$yarn_orphan_dir" ]]; then
+        echo -e "${CYAN}Limpando cache órfão do yarn (yarn desinstalado)...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            local yarn_orphan_size=$(du -sk "$yarn_orphan_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+            echo -e "  ${YELLOW}[DRY RUN]${NC} Cache órfão do yarn: $(format_size $yarn_orphan_size)"
+            total_freed=$((total_freed + yarn_orphan_size))
+            cache_log+="[DRY RUN] yarn orphan cache: $(format_size $yarn_orphan_size)\n"
+        else
+            rm -rf "$yarn_orphan_dir"
+            echo -e "  ${GREEN}[✓]${NC} Cache órfão do yarn removido"
+            cache_log+="[SUCESSO] yarn orphan cache removido\n"
+        fi
     else
         echo -e "  ${YELLOW}[⊘]${NC} yarn não encontrado"
+    fi
+    echo ""
+
+    # Limpar cache do Go
+    if command -v go &> /dev/null; then
+        echo -e "${CYAN}Limpando cache do Go...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            local go_cache_dir=$(go env GOCACHE 2>/dev/null)
+            if [[ -d "$go_cache_dir" ]]; then
+                local go_cache_size=$(du -sk "$go_cache_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+                echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do Go: $(format_size $go_cache_size)"
+                total_freed=$((total_freed + go_cache_size))
+                cache_log+="[DRY RUN] go cache: $(format_size $go_cache_size)\n"
+            fi
+        else
+            go clean -cache 2>&1
+            echo -e "  ${GREEN}[✓]${NC} Cache do Go limpo"
+            cache_log+="[SUCESSO] go cache limpo\n"
+        fi
+    else
+        echo -e "  ${YELLOW}[⊘]${NC} go não encontrado"
+    fi
+    echo ""
+
+    # Limpar cache do Composer (PHP)
+    if command -v composer &> /dev/null; then
+        echo -e "${CYAN}Limpando cache do Composer...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            local composer_cache_dir=$(composer config --global cache-dir 2>/dev/null)
+            if [[ -d "$composer_cache_dir" ]]; then
+                local composer_cache_size=$(du -sk "$composer_cache_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+                echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do Composer: $(format_size $composer_cache_size)"
+                total_freed=$((total_freed + composer_cache_size))
+                cache_log+="[DRY RUN] composer cache: $(format_size $composer_cache_size)\n"
+            fi
+        else
+            composer clear-cache 2>&1 | grep -v "^Changed"
+            echo -e "  ${GREEN}[✓]${NC} Cache do Composer limpo"
+            cache_log+="[SUCESSO] composer cache limpo\n"
+        fi
+    else
+        echo -e "  ${YELLOW}[⊘]${NC} composer não encontrado"
+    fi
+    echo ""
+
+    # Limpar cache do pip (Python)
+    if command -v pip &> /dev/null || command -v pip3 &> /dev/null; then
+        echo -e "${CYAN}Limpando cache do pip...${NC}"
+        local pip_cmd=$(command -v pip3 || command -v pip)
+        if [[ "$DRY_RUN" == true ]]; then
+            local pip_cache_dir=$($pip_cmd cache dir 2>/dev/null)
+            if [[ -d "$pip_cache_dir" ]]; then
+                local pip_cache_size=$(du -sk "$pip_cache_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+                echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do pip: $(format_size $pip_cache_size)"
+                total_freed=$((total_freed + pip_cache_size))
+                cache_log+="[DRY RUN] pip cache: $(format_size $pip_cache_size)\n"
+            fi
+        else
+            $pip_cmd cache purge 2>&1
+            echo -e "  ${GREEN}[✓]${NC} Cache do pip limpo"
+            cache_log+="[SUCESSO] pip cache limpo\n"
+        fi
+    else
+        echo -e "  ${YELLOW}[⊘]${NC} pip não encontrado"
     fi
     echo ""
 
@@ -224,6 +305,78 @@ clean_caches() {
     fi
 
     echo "$cache_log"
+}
+
+# Função para verificar limpeza pós-execução
+verify_cleanup() {
+    echo ""
+    echo -e "${BOLD}===================================================${NC}"
+    echo -e "${BOLD}  Verificação Pós-Limpeza${NC}"
+    echo -e "${BOLD}===================================================${NC}"
+    echo ""
+
+    local issues=0
+
+    # Verifica se ainda existem node_modules ou vendor de primeiro nível
+    echo -e "${CYAN}Verificando diretórios de dependências...${NC}"
+    local remaining=()
+    while IFS= read -r dir; do
+        remaining+=("$dir")
+    done < <(find "$TARGET_DIR" -maxdepth 2 -type d \( -name "node_modules" -o -name "vendor" \) 2>/dev/null)
+
+    if [[ ${#remaining[@]} -eq 0 ]]; then
+        echo -e "  ${GREEN}[✓]${NC} Nenhum node_modules ou vendor encontrado — diretório limpo"
+    else
+        echo -e "  ${RED}[!]${NC} Ainda existem ${#remaining[@]} pasta(s) não removida(s):"
+        for dir in "${remaining[@]}"; do
+            local project_name=$(basename "$(dirname "$dir")")
+            local folder_name=$(basename "$dir")
+            local size=$(get_dir_size "$dir")
+            echo -e "      ${YELLOW}$project_name/$folder_name${NC} ($(format_size $size))"
+            issues=$((issues + 1))
+        done
+    fi
+    echo ""
+
+    # Verifica caches se a flag foi usada
+    if [[ "$CLEAN_CACHE" == true ]]; then
+        echo -e "${CYAN}Verificando caches...${NC}"
+
+        local cache_checks=(
+            "npm:$(npm config get cache 2>/dev/null)"
+            "pnpm:$(pnpm store path 2>/dev/null)"
+            "yarn:$(yarn cache dir 2>/dev/null)"
+            "go:$(go env GOCACHE 2>/dev/null)"
+            "composer:$(composer config --global cache-dir 2>/dev/null)"
+            "pip:$(pip3 cache dir 2>/dev/null || pip cache dir 2>/dev/null)"
+            "yarn-orphan:$HOME/Library/Caches/Yarn"
+        )
+
+        for entry in "${cache_checks[@]}"; do
+            local name="${entry%%:*}"
+            local dir="${entry#*:}"
+            if [[ -d "$dir" ]]; then
+                local size=$(du -sk "$dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+                if [[ $size -gt 10485760 ]]; then  # > 10MB
+                    echo -e "  ${YELLOW}[!]${NC} Cache do ${name}: $(format_size $size) (ainda presente)"
+                    issues=$((issues + 1))
+                else
+                    echo -e "  ${GREEN}[✓]${NC} Cache do ${name}: $(format_size $size)"
+                fi
+            fi
+        done
+        echo ""
+    fi
+
+    # Resultado final
+    echo -e "${BOLD}===================================================${NC}"
+    if [[ $issues -eq 0 ]]; then
+        echo -e "${GREEN}${BOLD}  Tudo limpo! Nenhum problema encontrado.${NC}"
+    else
+        echo -e "${YELLOW}${BOLD}  ${issues} item(s) com atenção — verifique acima.${NC}"
+    fi
+    echo -e "${BOLD}===================================================${NC}"
+    echo ""
 }
 
 # Função para exibir header
@@ -383,3 +536,10 @@ echo -e "${CYAN}Para reinstalar dependências em um projeto:${NC}"
 echo -e "  ${YELLOW}cd $TARGET_DIR/nome-do-projeto${NC}"
 echo -e "  ${YELLOW}npm install${NC}  ${CYAN}(ou pnpm install, ou yarn install)${NC}"
 echo ""
+
+# Verificação pós-limpeza
+verify_cleanup
+
+echo "" >> "$LOG_FILE"
+echo "=== VERIFICAÇÃO ===" >> "$LOG_FILE"
+echo "Verificação pós-limpeza concluída" >> "$LOG_FILE"
