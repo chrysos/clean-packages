@@ -49,7 +49,7 @@ ${BOLD}OPÇÕES:${NC}
     --dir <caminho>    Diretório alvo (padrão: $TARGET_DIR)
     --clean-cache      Limpa caches: npm, pnpm, yarn, Go, Composer, pip, Serena,
                        Xcode, Gradle, uv, Cypress, Playwright, Homebrew,
-                       Codex/Claude/ChatGPT (só caches) e Docker
+                       Codex/Claude/ChatGPT, navegadores, apps Electron e Docker
     --help             Mostra esta ajuda
 
 ${BOLD}EXEMPLOS:${NC}
@@ -383,10 +383,41 @@ clean_caches() {
     clean_dir_cache "Codex (app)" "$HOME/Library/Caches/com.openai.codex" "codex app cache"
     clean_dir_cache "Codex (runtimes)" "$HOME/.cache/codex-runtimes" "codex runtimes cache"
     clean_dir_cache "Codex" "$HOME/Library/Caches/Codex" "codex cache"
-    clean_dir_cache "Claude Desktop (Cache)" "$HOME/Library/Application Support/Claude/Cache" "claude desktop cache"
-    clean_dir_cache "Claude Desktop (Code Cache)" "$HOME/Library/Application Support/Claude/Code Cache" "claude desktop code cache"
     clean_dir_cache "Claude Code CLI" "$HOME/Library/Caches/claude-cli-nodejs" "claude cli cache"
     clean_dir_cache "ChatGPT (app)" "$HOME/Library/Caches/com.openai.chat" "chatgpt app cache"
+
+    # Limpar caches de navegadores (cache HTTP — perfis/histórico são preservados)
+    clean_dir_cache "Chrome" "$HOME/Library/Caches/Google" "chrome cache"
+    clean_dir_cache "Brave" "$HOME/Library/Caches/BraveSoftware" "brave cache"
+    clean_dir_cache "Brave (app)" "$HOME/Library/Caches/com.brave.Browser" "brave app cache"
+    clean_dir_cache "Firefox" "$HOME/Library/Caches/Firefox" "firefox cache"
+    clean_dir_cache "Edge" "$HOME/Library/Caches/com.microsoft.edgemac" "edge cache"
+    clean_dir_cache "Arc" "$HOME/Library/Caches/company.thebrowser.Browser" "arc cache"
+
+    # Sweep genérico de caches de apps Electron (Slack, Cursor, Deezer, Claude, etc.)
+    # Remove subpastas regeneráveis dentro de cada app em Application Support.
+    # Preserva os dados do app (settings, mensagens) — só toca em Cache/GPUCache/etc.
+    # Dica: feche os apps antes para evitar glitches.
+    echo -e "${CYAN}Limpando caches de apps Electron...${NC}"
+    local electron_total=0
+    local electron_removed=0
+    while IFS= read -r cdir; do
+        local csize=$(du -sk "$cdir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+        if [[ "$DRY_RUN" == true ]]; then
+            electron_total=$((electron_total + csize))
+        else
+            rm -rf "$cdir" 2>/dev/null && { electron_removed=$((electron_removed + 1)); electron_total=$((electron_total + csize)); }
+        fi
+    done < <(find "$HOME/Library/Application Support" -maxdepth 2 -type d \( -name "Cache" -o -name "Code Cache" -o -name "GPUCache" -o -name "Service Worker" -o -name "DawnWebGPUCache" \) 2>/dev/null)
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "  ${YELLOW}[DRY RUN]${NC} Caches de apps Electron: $(format_size $electron_total)"
+        total_freed=$((total_freed + electron_total))
+        cache_log+="[DRY RUN] electron app caches: $(format_size $electron_total)\n"
+    else
+        echo -e "  ${GREEN}[✓]${NC} Caches de apps Electron limpos (${electron_removed} pastas, $(format_size $electron_total))"
+        cache_log+="[SUCESSO] electron app caches limpos (${electron_removed} pastas)\n"
+    fi
+    echo ""
 
     # Limpar cache do Docker
     if command -v docker &> /dev/null; then
@@ -470,6 +501,8 @@ verify_cleanup() {
             "codex-app:$HOME/Library/Caches/com.openai.codex"
             "codex-runtimes:$HOME/.cache/codex-runtimes"
             "claude-desktop:$HOME/Library/Application Support/Claude/Cache"
+            "chrome:$HOME/Library/Caches/Google"
+            "brave:$HOME/Library/Caches/BraveSoftware"
         )
 
         for entry in "${cache_checks[@]}"; do

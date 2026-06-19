@@ -53,7 +53,7 @@ This repository contains `clean-packages.sh`, a bash script for automated cleanu
 - `--execute` - Actually performs deletion
 - `--force` - Skips confirmation prompt (use with caution)
 - `--dir <path>` - Specify target directory (default: `~/Code`)
-- `--clean-cache` - Clean package manager, tooling, AI, and Docker caches (npm, pnpm, yarn, Go, Composer, pip, Serena, Xcode, Gradle, uv, Cypress, Playwright, Homebrew, Codex/Claude/ChatGPT, Docker)
+- `--clean-cache` - Clean package manager, tooling, AI, browser, Electron, and Docker caches (npm, pnpm, yarn, Go, Composer, pip, Serena, Xcode, Gradle, uv, Cypress, Playwright, Homebrew, Codex/Claude/ChatGPT, browsers, Electron apps, Docker)
 - `--help` or `-h` - Display help
 
 ## Architecture
@@ -77,7 +77,10 @@ The script operates in four main phases:
   - **Directory-based caches** use the `clean_dir_cache <label> <dir> <log_key>` helper (estimates in dry-run, `rm -rf` in execute; relies on bash dynamic scoping to update `total_freed`/`cache_log`). Used for: Xcode `DerivedData` + `iOS DeviceSupport`, Gradle `~/.gradle/caches`, `~/.cache/uv`, Cypress, Playwright
   - **Xcode** also runs `xcrun simctl delete unavailable` to drop orphaned simulators (guarded by `command -v xcrun`)
   - **Homebrew**: `brew cleanup -s` + removes `brew --cache`; dry-run parses `brew cleanup -n` for the estimate
-  - **AI tool caches** (Codex, Claude, ChatGPT): only HTTP/runtime caches under `~/Library/Caches/*` and `~/Library/Application Support/Claude/{Cache,Code Cache}` + `~/.cache/codex-runtimes`. NEVER touches sessions, history, `~/.claude/projects` (memories), `~/.codex/worktrees` (may hold uncommitted work), plugins, or VM bundles. Close the apps before cleaning to avoid glitches
+  - **AI tool caches** (Codex, Claude, ChatGPT): only HTTP/runtime caches under `~/Library/Caches/*` + `~/.cache/codex-runtimes`. NEVER touches sessions, history, `~/.claude/projects` (memories), `~/.codex/worktrees` (may hold uncommitted work), plugins, or VM bundles
+  - **Browser caches**: named `~/Library/Caches/*` dirs (Chrome/Google, Brave, Firefox, Edge, Arc). Only HTTP cache — browser profiles/history (under `Application Support`) are untouched
+  - **Electron app sweep**: generic `find -maxdepth 2` over `~/Library/Application Support/*/{Cache,Code Cache,GPUCache,Service Worker,DawnWebGPUCache}` — catches Slack, Cursor, Deezer, Claude Desktop, etc. automatically. Only removes regenerable cache subdirs, never the apps' data. Close the apps before cleaning to avoid glitches
+  - **Orphaned app data** (leftover `Application Support` dirs from uninstalled apps) is NOT handled by the script — it's app data, not cache, and is a one-time manual cleanup
 - **Logging**: Execution mode creates timestamped log files (format: `cleanup-log-YYYY-MM-DD-HH-MM-SS.txt`)
 - **Colorized output**: Uses ANSI color codes for terminal display
 - **Size calculation**: Uses `du -sk` for accurate directory size reporting
