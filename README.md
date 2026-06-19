@@ -81,7 +81,7 @@ chmod +x clean-packages.sh
 | `--execute` | Executa a deleção de fato |
 | `--force` | Não pede confirmação (use com cuidado!) |
 | `--dir <caminho>` | Especifica diretório alvo (padrão: ~/Code) |
-| `--clean-cache` | Limpa caches de npm, pnpm, yarn e Docker |
+| `--clean-cache` | Limpa caches: npm, pnpm, yarn, Go, Composer, pip, Serena, Xcode, Gradle, uv, Cypress, Playwright, Homebrew, Codex/Claude/ChatGPT (só caches) e Docker |
 | `--help` ou `-h` | Mostra ajuda completa |
 
 ## Exemplos de uso
@@ -190,7 +190,7 @@ O script detectará automaticamente que não há pastas para limpar e executará
 - Lista de todas as pastas encontradas
 - Tamanho individual de cada pasta
 - Tamanho total a ser liberado
-- Status de limpeza de cache por ferramenta (npm, pnpm, yarn, Docker)
+- Status de limpeza de cache por ferramenta (npm, pnpm, yarn, Go, Composer, pip, Serena, Xcode, Gradle, uv, Cypress, Playwright, Homebrew, Codex/Claude/ChatGPT, Docker)
 - Estimativa de espaço dos caches (modo dry-run)
 - Barra de progresso durante deleção
 - Resumo final com estatísticas

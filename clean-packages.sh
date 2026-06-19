@@ -47,7 +47,9 @@ ${BOLD}OPÇÕES:${NC}
     --execute          Executa a deleção de fato
     --force            Não pede confirmação (use com cuidado!)
     --dir <caminho>    Diretório alvo (padrão: $TARGET_DIR)
-    --clean-cache      Limpa caches (Docker, npm, pnpm, yarn)
+    --clean-cache      Limpa caches: npm, pnpm, yarn, Go, Composer, pip, Serena,
+                       Xcode, Gradle, uv, Cypress, Playwright, Homebrew,
+                       Codex/Claude/ChatGPT (só caches) e Docker
     --help             Mostra esta ajuda
 
 ${BOLD}EXEMPLOS:${NC}
@@ -123,6 +125,28 @@ get_dir_size() {
     else
         echo "0"
     fi
+}
+
+# Helper: limpa um cache baseado em diretório (estima em dry-run, remove em execute)
+# Usa escopo dinâmico do bash para acumular em total_freed/cache_log de clean_caches()
+clean_dir_cache() {
+    local label="$1"
+    local dir="$2"
+    local log_key="$3"
+    [[ -d "$dir" ]] || return 0
+
+    echo -e "${CYAN}Limpando cache do ${label}...${NC}"
+    local size=$(du -sk "$dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do ${label}: $(format_size $size)"
+        total_freed=$((total_freed + size))
+        cache_log+="[DRY RUN] ${log_key}: $(format_size $size)\n"
+    else
+        rm -rf "$dir" 2>/dev/null
+        echo -e "  ${GREEN}[✓]${NC} Cache do ${label} limpo ($(format_size $size))"
+        cache_log+="[SUCESSO] ${log_key} limpo\n"
+    fi
+    echo ""
 }
 
 # Função para limpar caches
@@ -277,6 +301,93 @@ clean_caches() {
     fi
     echo ""
 
+    # Limpar cache do Serena (caches por projeto + logs globais)
+    # Preserva: memories/, project.yml, e language_servers (re-download lento)
+    local serena_logs_dir="$HOME/.serena/logs"
+    echo -e "${CYAN}Limpando cache do Serena...${NC}"
+    if [[ "$DRY_RUN" == true ]]; then
+        local serena_total=0
+        while IFS= read -r serena_cache; do
+            local sc_size=$(du -sk "$serena_cache" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+            serena_total=$((serena_total + sc_size))
+        done < <(find "$TARGET_DIR" -maxdepth 3 -type d -path "*/.serena/cache" 2>/dev/null)
+        if [[ -d "$serena_logs_dir" ]]; then
+            local serena_logs_size=$(du -sk "$serena_logs_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+            serena_total=$((serena_total + serena_logs_size))
+        fi
+        if [[ $serena_total -gt 0 ]]; then
+            echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do Serena (projetos + logs): $(format_size $serena_total)"
+            total_freed=$((total_freed + serena_total))
+            cache_log+="[DRY RUN] serena cache: $(format_size $serena_total)\n"
+        else
+            echo -e "  ${YELLOW}[⊘]${NC} Nenhum cache do Serena encontrado"
+        fi
+    else
+        local serena_removed=0
+        while IFS= read -r serena_cache; do
+            rm -rf "$serena_cache" && serena_removed=$((serena_removed + 1))
+        done < <(find "$TARGET_DIR" -maxdepth 3 -type d -path "*/.serena/cache" 2>/dev/null)
+        if [[ -d "$serena_logs_dir" ]]; then
+            rm -rf "$serena_logs_dir"/* 2>/dev/null
+        fi
+        echo -e "  ${GREEN}[✓]${NC} Cache do Serena limpo (${serena_removed} projeto(s) + logs)"
+        cache_log+="[SUCESSO] serena cache limpo (${serena_removed} projetos + logs)\n"
+    fi
+    echo ""
+
+    # Limpar caches do Xcode (DerivedData, símbolos de iOS, simuladores órfãos)
+    clean_dir_cache "Xcode DerivedData" "$HOME/Library/Developer/Xcode/DerivedData" "xcode derived data"
+    clean_dir_cache "Xcode iOS DeviceSupport" "$HOME/Library/Developer/Xcode/iOS DeviceSupport" "xcode ios device support"
+    if command -v xcrun &> /dev/null && xcrun simctl help &> /dev/null; then
+        echo -e "${CYAN}Limpando simuladores iOS indisponíveis...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            echo -e "  ${YELLOW}[DRY RUN]${NC} Simuladores indisponíveis seriam removidos"
+            cache_log+="[DRY RUN] xcode simuladores indisponíveis\n"
+        else
+            xcrun simctl delete unavailable 2>&1
+            echo -e "  ${GREEN}[✓]${NC} Simuladores iOS indisponíveis removidos"
+            cache_log+="[SUCESSO] xcode simuladores indisponíveis removidos\n"
+        fi
+        echo ""
+    fi
+
+    # Limpar cache do Gradle
+    clean_dir_cache "Gradle" "$HOME/.gradle/caches" "gradle cache"
+
+    # Limpar cache do uv (Python)
+    clean_dir_cache "uv" "$HOME/.cache/uv" "uv cache"
+
+    # Limpar caches de browsers de teste (Cypress, Playwright)
+    clean_dir_cache "Cypress" "$HOME/Library/Caches/Cypress" "cypress cache"
+    clean_dir_cache "Playwright" "$HOME/Library/Caches/ms-playwright" "playwright cache"
+
+    # Limpar cache do Homebrew (versões antigas)
+    if command -v brew &> /dev/null; then
+        echo -e "${CYAN}Limpando cache do Homebrew...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            local brew_freed=$(brew cleanup -n 2>/dev/null | grep -oE 'free approximately [0-9.]+[A-Za-z]+' | grep -oE '[0-9.]+[A-Za-z]+' | head -1)
+            echo -e "  ${YELLOW}[DRY RUN]${NC} Homebrew cleanup liberaria: ${brew_freed:-N/A}"
+            cache_log+="[DRY RUN] homebrew cleanup: ${brew_freed:-N/A}\n"
+        else
+            brew cleanup -s 2>&1 | tail -3
+            rm -rf "$(brew --cache)" 2>/dev/null
+            echo -e "  ${GREEN}[✓]${NC} Cache do Homebrew limpo"
+            cache_log+="[SUCESSO] homebrew cache limpo\n"
+        fi
+        echo ""
+    fi
+
+    # Limpar caches de ferramentas de IA (Codex, Claude, ChatGPT)
+    # APENAS caches HTTP/runtime regeneráveis — nunca sessões, histórico, plugins, memórias ou VMs
+    # Dica: feche os apps antes de limpar para evitar glitches
+    clean_dir_cache "Codex (app)" "$HOME/Library/Caches/com.openai.codex" "codex app cache"
+    clean_dir_cache "Codex (runtimes)" "$HOME/.cache/codex-runtimes" "codex runtimes cache"
+    clean_dir_cache "Codex" "$HOME/Library/Caches/Codex" "codex cache"
+    clean_dir_cache "Claude Desktop (Cache)" "$HOME/Library/Application Support/Claude/Cache" "claude desktop cache"
+    clean_dir_cache "Claude Desktop (Code Cache)" "$HOME/Library/Application Support/Claude/Code Cache" "claude desktop code cache"
+    clean_dir_cache "Claude Code CLI" "$HOME/Library/Caches/claude-cli-nodejs" "claude cli cache"
+    clean_dir_cache "ChatGPT (app)" "$HOME/Library/Caches/com.openai.chat" "chatgpt app cache"
+
     # Limpar cache do Docker
     if command -v docker &> /dev/null; then
         echo -e "${CYAN}Limpando cache do Docker...${NC}"
@@ -320,9 +431,9 @@ verify_cleanup() {
     # Verifica se ainda existem node_modules ou vendor de primeiro nível
     echo -e "${CYAN}Verificando diretórios de dependências...${NC}"
     local remaining=()
-    while IFS= read -r dir; do
+    find "$TARGET_DIR" -maxdepth 2 -type d \( -name "node_modules" -o -name "vendor" \) 2>/dev/null | while IFS= read -r dir; do
         remaining+=("$dir")
-    done < <(find "$TARGET_DIR" -maxdepth 2 -type d \( -name "node_modules" -o -name "vendor" \) 2>/dev/null)
+    done
 
     if [[ ${#remaining[@]} -eq 0 ]]; then
         echo -e "  ${GREEN}[✓]${NC} Nenhum node_modules ou vendor encontrado — diretório limpo"
@@ -350,6 +461,15 @@ verify_cleanup() {
             "composer:$(composer config --global cache-dir 2>/dev/null)"
             "pip:$(pip3 cache dir 2>/dev/null || pip cache dir 2>/dev/null)"
             "yarn-orphan:$HOME/Library/Caches/Yarn"
+            "xcode-derived:$HOME/Library/Developer/Xcode/DerivedData"
+            "xcode-devicesupport:$HOME/Library/Developer/Xcode/iOS DeviceSupport"
+            "gradle:$HOME/.gradle/caches"
+            "uv:$HOME/.cache/uv"
+            "cypress:$HOME/Library/Caches/Cypress"
+            "playwright:$HOME/Library/Caches/ms-playwright"
+            "codex-app:$HOME/Library/Caches/com.openai.codex"
+            "codex-runtimes:$HOME/.cache/codex-runtimes"
+            "claude-desktop:$HOME/Library/Application Support/Claude/Cache"
         )
 
         for entry in "${cache_checks[@]}"; do
@@ -365,6 +485,18 @@ verify_cleanup() {
                 fi
             fi
         done
+
+        # Verifica caches do Serena (projetos + logs)
+        local serena_remaining=0
+        while IFS= read -r serena_cache; do
+            serena_remaining=$((serena_remaining + 1))
+        done < <(find "$TARGET_DIR" -maxdepth 3 -type d -path "*/.serena/cache" -not -empty 2>/dev/null)
+        if [[ $serena_remaining -eq 0 ]]; then
+            echo -e "  ${GREEN}[✓]${NC} Cache do Serena: limpo"
+        else
+            echo -e "  ${YELLOW}[!]${NC} Cache do Serena: ${serena_remaining} projeto(s) ainda com cache"
+            issues=$((issues + 1))
+        fi
         echo ""
     fi
 
