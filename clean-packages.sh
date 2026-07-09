@@ -47,7 +47,9 @@ ${BOLD}OPÇÕES:${NC}
     --execute          Executa a deleção de fato
     --force            Não pede confirmação (use com cuidado!)
     --dir <caminho>    Diretório alvo (padrão: $TARGET_DIR)
-    --clean-cache      Limpa caches (Docker, npm, pnpm, yarn)
+    --clean-cache      Limpa caches: npm, pnpm, yarn, Go, Composer, pip, Serena,
+                       Xcode, Gradle, uv, Cypress, Playwright, Homebrew,
+                       Codex/Claude/ChatGPT, navegadores, apps Electron e Docker
     --help             Mostra esta ajuda
 
 ${BOLD}EXEMPLOS:${NC}
@@ -125,6 +127,28 @@ get_dir_size() {
     fi
 }
 
+# Helper: limpa um cache baseado em diretório (estima em dry-run, remove em execute)
+# Usa escopo dinâmico do bash para acumular em total_freed/cache_log de clean_caches()
+clean_dir_cache() {
+    local label="$1"
+    local dir="$2"
+    local log_key="$3"
+    [[ -d "$dir" ]] || return 0
+
+    echo -e "${CYAN}Limpando cache do ${label}...${NC}"
+    local size=$(du -sk "$dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do ${label}: $(format_size $size)"
+        total_freed=$((total_freed + size))
+        cache_log+="[DRY RUN] ${log_key}: $(format_size $size)\n"
+    else
+        rm -rf "$dir" 2>/dev/null
+        echo -e "  ${GREEN}[✓]${NC} Cache do ${label} limpo ($(format_size $size))"
+        cache_log+="[SUCESSO] ${log_key} limpo\n"
+    fi
+    echo ""
+}
+
 # Função para limpar caches
 clean_caches() {
     echo ""
@@ -145,7 +169,11 @@ clean_caches() {
             total_freed=$((total_freed + npm_cache_size))
             cache_log+="[DRY RUN] npm cache: $(format_size $npm_cache_size)\n"
         else
+            local npm_cache_dir=$(npm config get cache 2>/dev/null)
             npm cache clean --force 2>&1 | grep -v "^npm"
+            if [[ -d "$npm_cache_dir" ]]; then
+                rm -rf "$npm_cache_dir"
+            fi
             echo -e "  ${GREEN}[✓]${NC} Cache do npm limpo"
             cache_log+="[SUCESSO] npm cache limpo\n"
         fi
@@ -176,6 +204,7 @@ clean_caches() {
     echo ""
 
     # Limpar cache do yarn
+    local yarn_orphan_dir="$HOME/Library/Caches/Yarn"
     if command -v yarn &> /dev/null; then
         echo -e "${CYAN}Limpando cache do yarn...${NC}"
         if [[ "$DRY_RUN" == true ]]; then
@@ -191,8 +220,202 @@ clean_caches() {
             echo -e "  ${GREEN}[✓]${NC} Cache do yarn limpo"
             cache_log+="[SUCESSO] yarn cache limpo\n"
         fi
+    elif [[ -d "$yarn_orphan_dir" ]]; then
+        echo -e "${CYAN}Limpando cache órfão do yarn (yarn desinstalado)...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            local yarn_orphan_size=$(du -sk "$yarn_orphan_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+            echo -e "  ${YELLOW}[DRY RUN]${NC} Cache órfão do yarn: $(format_size $yarn_orphan_size)"
+            total_freed=$((total_freed + yarn_orphan_size))
+            cache_log+="[DRY RUN] yarn orphan cache: $(format_size $yarn_orphan_size)\n"
+        else
+            rm -rf "$yarn_orphan_dir"
+            echo -e "  ${GREEN}[✓]${NC} Cache órfão do yarn removido"
+            cache_log+="[SUCESSO] yarn orphan cache removido\n"
+        fi
     else
         echo -e "  ${YELLOW}[⊘]${NC} yarn não encontrado"
+    fi
+    echo ""
+
+    # Limpar cache do Go
+    if command -v go &> /dev/null; then
+        echo -e "${CYAN}Limpando cache do Go...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            local go_cache_dir=$(go env GOCACHE 2>/dev/null)
+            if [[ -d "$go_cache_dir" ]]; then
+                local go_cache_size=$(du -sk "$go_cache_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+                echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do Go: $(format_size $go_cache_size)"
+                total_freed=$((total_freed + go_cache_size))
+                cache_log+="[DRY RUN] go cache: $(format_size $go_cache_size)\n"
+            fi
+        else
+            go clean -cache 2>&1
+            echo -e "  ${GREEN}[✓]${NC} Cache do Go limpo"
+            cache_log+="[SUCESSO] go cache limpo\n"
+        fi
+    else
+        echo -e "  ${YELLOW}[⊘]${NC} go não encontrado"
+    fi
+    echo ""
+
+    # Limpar cache do Composer (PHP)
+    if command -v composer &> /dev/null; then
+        echo -e "${CYAN}Limpando cache do Composer...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            local composer_cache_dir=$(composer config --global cache-dir 2>/dev/null)
+            if [[ -d "$composer_cache_dir" ]]; then
+                local composer_cache_size=$(du -sk "$composer_cache_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+                echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do Composer: $(format_size $composer_cache_size)"
+                total_freed=$((total_freed + composer_cache_size))
+                cache_log+="[DRY RUN] composer cache: $(format_size $composer_cache_size)\n"
+            fi
+        else
+            composer clear-cache 2>&1 | grep -v "^Changed"
+            echo -e "  ${GREEN}[✓]${NC} Cache do Composer limpo"
+            cache_log+="[SUCESSO] composer cache limpo\n"
+        fi
+    else
+        echo -e "  ${YELLOW}[⊘]${NC} composer não encontrado"
+    fi
+    echo ""
+
+    # Limpar cache do pip (Python)
+    if command -v pip &> /dev/null || command -v pip3 &> /dev/null; then
+        echo -e "${CYAN}Limpando cache do pip...${NC}"
+        local pip_cmd=$(command -v pip3 || command -v pip)
+        if [[ "$DRY_RUN" == true ]]; then
+            local pip_cache_dir=$($pip_cmd cache dir 2>/dev/null)
+            if [[ -d "$pip_cache_dir" ]]; then
+                local pip_cache_size=$(du -sk "$pip_cache_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+                echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do pip: $(format_size $pip_cache_size)"
+                total_freed=$((total_freed + pip_cache_size))
+                cache_log+="[DRY RUN] pip cache: $(format_size $pip_cache_size)\n"
+            fi
+        else
+            $pip_cmd cache purge 2>&1
+            echo -e "  ${GREEN}[✓]${NC} Cache do pip limpo"
+            cache_log+="[SUCESSO] pip cache limpo\n"
+        fi
+    else
+        echo -e "  ${YELLOW}[⊘]${NC} pip não encontrado"
+    fi
+    echo ""
+
+    # Limpar cache do Serena (caches por projeto + logs globais)
+    # Preserva: memories/, project.yml, e language_servers (re-download lento)
+    local serena_logs_dir="$HOME/.serena/logs"
+    echo -e "${CYAN}Limpando cache do Serena...${NC}"
+    if [[ "$DRY_RUN" == true ]]; then
+        local serena_total=0
+        while IFS= read -r serena_cache; do
+            local sc_size=$(du -sk "$serena_cache" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+            serena_total=$((serena_total + sc_size))
+        done < <(find "$TARGET_DIR" -maxdepth 3 -type d -path "*/.serena/cache" 2>/dev/null)
+        if [[ -d "$serena_logs_dir" ]]; then
+            local serena_logs_size=$(du -sk "$serena_logs_dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+            serena_total=$((serena_total + serena_logs_size))
+        fi
+        if [[ $serena_total -gt 0 ]]; then
+            echo -e "  ${YELLOW}[DRY RUN]${NC} Cache do Serena (projetos + logs): $(format_size $serena_total)"
+            total_freed=$((total_freed + serena_total))
+            cache_log+="[DRY RUN] serena cache: $(format_size $serena_total)\n"
+        else
+            echo -e "  ${YELLOW}[⊘]${NC} Nenhum cache do Serena encontrado"
+        fi
+    else
+        local serena_removed=0
+        while IFS= read -r serena_cache; do
+            rm -rf "$serena_cache" && serena_removed=$((serena_removed + 1))
+        done < <(find "$TARGET_DIR" -maxdepth 3 -type d -path "*/.serena/cache" 2>/dev/null)
+        if [[ -d "$serena_logs_dir" ]]; then
+            rm -rf "$serena_logs_dir"/* 2>/dev/null
+        fi
+        echo -e "  ${GREEN}[✓]${NC} Cache do Serena limpo (${serena_removed} projeto(s) + logs)"
+        cache_log+="[SUCESSO] serena cache limpo (${serena_removed} projetos + logs)\n"
+    fi
+    echo ""
+
+    # Limpar caches do Xcode (DerivedData, símbolos de iOS, simuladores órfãos)
+    clean_dir_cache "Xcode DerivedData" "$HOME/Library/Developer/Xcode/DerivedData" "xcode derived data"
+    clean_dir_cache "Xcode iOS DeviceSupport" "$HOME/Library/Developer/Xcode/iOS DeviceSupport" "xcode ios device support"
+    if command -v xcrun &> /dev/null && xcrun simctl help &> /dev/null; then
+        echo -e "${CYAN}Limpando simuladores iOS indisponíveis...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            echo -e "  ${YELLOW}[DRY RUN]${NC} Simuladores indisponíveis seriam removidos"
+            cache_log+="[DRY RUN] xcode simuladores indisponíveis\n"
+        else
+            xcrun simctl delete unavailable 2>&1
+            echo -e "  ${GREEN}[✓]${NC} Simuladores iOS indisponíveis removidos"
+            cache_log+="[SUCESSO] xcode simuladores indisponíveis removidos\n"
+        fi
+        echo ""
+    fi
+
+    # Limpar cache do Gradle
+    clean_dir_cache "Gradle" "$HOME/.gradle/caches" "gradle cache"
+
+    # Limpar cache do uv (Python)
+    clean_dir_cache "uv" "$HOME/.cache/uv" "uv cache"
+
+    # Limpar caches de browsers de teste (Cypress, Playwright)
+    clean_dir_cache "Cypress" "$HOME/Library/Caches/Cypress" "cypress cache"
+    clean_dir_cache "Playwright" "$HOME/Library/Caches/ms-playwright" "playwright cache"
+
+    # Limpar cache do Homebrew (versões antigas)
+    if command -v brew &> /dev/null; then
+        echo -e "${CYAN}Limpando cache do Homebrew...${NC}"
+        if [[ "$DRY_RUN" == true ]]; then
+            local brew_freed=$(brew cleanup -n 2>/dev/null | grep -oE 'free approximately [0-9.]+[A-Za-z]+' | grep -oE '[0-9.]+[A-Za-z]+' | head -1)
+            echo -e "  ${YELLOW}[DRY RUN]${NC} Homebrew cleanup liberaria: ${brew_freed:-N/A}"
+            cache_log+="[DRY RUN] homebrew cleanup: ${brew_freed:-N/A}\n"
+        else
+            brew cleanup -s 2>&1 | tail -3
+            rm -rf "$(brew --cache)" 2>/dev/null
+            echo -e "  ${GREEN}[✓]${NC} Cache do Homebrew limpo"
+            cache_log+="[SUCESSO] homebrew cache limpo\n"
+        fi
+        echo ""
+    fi
+
+    # Limpar caches de ferramentas de IA (Codex, Claude, ChatGPT)
+    # APENAS caches HTTP/runtime regeneráveis — nunca sessões, histórico, plugins, memórias ou VMs
+    # Dica: feche os apps antes de limpar para evitar glitches
+    clean_dir_cache "Codex (app)" "$HOME/Library/Caches/com.openai.codex" "codex app cache"
+    clean_dir_cache "Codex (runtimes)" "$HOME/.cache/codex-runtimes" "codex runtimes cache"
+    clean_dir_cache "Codex" "$HOME/Library/Caches/Codex" "codex cache"
+    clean_dir_cache "Claude Code CLI" "$HOME/Library/Caches/claude-cli-nodejs" "claude cli cache"
+    clean_dir_cache "ChatGPT (app)" "$HOME/Library/Caches/com.openai.chat" "chatgpt app cache"
+
+    # Limpar caches de navegadores (cache HTTP — perfis/histórico são preservados)
+    clean_dir_cache "Chrome" "$HOME/Library/Caches/Google" "chrome cache"
+    clean_dir_cache "Brave" "$HOME/Library/Caches/BraveSoftware" "brave cache"
+    clean_dir_cache "Brave (app)" "$HOME/Library/Caches/com.brave.Browser" "brave app cache"
+    clean_dir_cache "Firefox" "$HOME/Library/Caches/Firefox" "firefox cache"
+    clean_dir_cache "Edge" "$HOME/Library/Caches/com.microsoft.edgemac" "edge cache"
+    clean_dir_cache "Arc" "$HOME/Library/Caches/company.thebrowser.Browser" "arc cache"
+
+    # Sweep genérico de caches de apps Electron (Slack, Cursor, Deezer, Claude, etc.)
+    # Remove subpastas regeneráveis dentro de cada app em Application Support.
+    # Preserva os dados do app (settings, mensagens) — só toca em Cache/GPUCache/etc.
+    # Dica: feche os apps antes para evitar glitches.
+    echo -e "${CYAN}Limpando caches de apps Electron...${NC}"
+    local electron_total=0
+    local electron_removed=0
+    while IFS= read -r cdir; do
+        local csize=$(du -sk "$cdir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+        if [[ "$DRY_RUN" == true ]]; then
+            electron_total=$((electron_total + csize))
+        else
+            rm -rf "$cdir" 2>/dev/null && { electron_removed=$((electron_removed + 1)); electron_total=$((electron_total + csize)); }
+        fi
+    done < <(find "$HOME/Library/Application Support" -maxdepth 2 -type d \( -name "Cache" -o -name "Code Cache" -o -name "GPUCache" -o -name "Service Worker" -o -name "DawnWebGPUCache" \) 2>/dev/null)
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "  ${YELLOW}[DRY RUN]${NC} Caches de apps Electron: $(format_size $electron_total)"
+        total_freed=$((total_freed + electron_total))
+        cache_log+="[DRY RUN] electron app caches: $(format_size $electron_total)\n"
+    else
+        echo -e "  ${GREEN}[✓]${NC} Caches de apps Electron limpos (${electron_removed} pastas, $(format_size $electron_total))"
+        cache_log+="[SUCESSO] electron app caches limpos (${electron_removed} pastas)\n"
     fi
     echo ""
 
@@ -224,6 +447,101 @@ clean_caches() {
     fi
 
     echo "$cache_log"
+}
+
+# Função para verificar limpeza pós-execução
+verify_cleanup() {
+    echo ""
+    echo -e "${BOLD}===================================================${NC}"
+    echo -e "${BOLD}  Verificação Pós-Limpeza${NC}"
+    echo -e "${BOLD}===================================================${NC}"
+    echo ""
+
+    local issues=0
+
+    # Verifica se ainda existem node_modules ou vendor de primeiro nível
+    echo -e "${CYAN}Verificando diretórios de dependências...${NC}"
+    local remaining=()
+    find "$TARGET_DIR" -maxdepth 2 -type d \( -name "node_modules" -o -name "vendor" \) 2>/dev/null | while IFS= read -r dir; do
+        remaining+=("$dir")
+    done
+
+    if [[ ${#remaining[@]} -eq 0 ]]; then
+        echo -e "  ${GREEN}[✓]${NC} Nenhum node_modules ou vendor encontrado — diretório limpo"
+    else
+        echo -e "  ${RED}[!]${NC} Ainda existem ${#remaining[@]} pasta(s) não removida(s):"
+        for dir in "${remaining[@]}"; do
+            local project_name=$(basename "$(dirname "$dir")")
+            local folder_name=$(basename "$dir")
+            local size=$(get_dir_size "$dir")
+            echo -e "      ${YELLOW}$project_name/$folder_name${NC} ($(format_size $size))"
+            issues=$((issues + 1))
+        done
+    fi
+    echo ""
+
+    # Verifica caches se a flag foi usada
+    if [[ "$CLEAN_CACHE" == true ]]; then
+        echo -e "${CYAN}Verificando caches...${NC}"
+
+        local cache_checks=(
+            "npm:$(npm config get cache 2>/dev/null)"
+            "pnpm:$(pnpm store path 2>/dev/null)"
+            "yarn:$(yarn cache dir 2>/dev/null)"
+            "go:$(go env GOCACHE 2>/dev/null)"
+            "composer:$(composer config --global cache-dir 2>/dev/null)"
+            "pip:$(pip3 cache dir 2>/dev/null || pip cache dir 2>/dev/null)"
+            "yarn-orphan:$HOME/Library/Caches/Yarn"
+            "xcode-derived:$HOME/Library/Developer/Xcode/DerivedData"
+            "xcode-devicesupport:$HOME/Library/Developer/Xcode/iOS DeviceSupport"
+            "gradle:$HOME/.gradle/caches"
+            "uv:$HOME/.cache/uv"
+            "cypress:$HOME/Library/Caches/Cypress"
+            "playwright:$HOME/Library/Caches/ms-playwright"
+            "codex-app:$HOME/Library/Caches/com.openai.codex"
+            "codex-runtimes:$HOME/.cache/codex-runtimes"
+            "claude-desktop:$HOME/Library/Application Support/Claude/Cache"
+            "chrome:$HOME/Library/Caches/Google"
+            "brave:$HOME/Library/Caches/BraveSoftware"
+        )
+
+        for entry in "${cache_checks[@]}"; do
+            local name="${entry%%:*}"
+            local dir="${entry#*:}"
+            if [[ -d "$dir" ]]; then
+                local size=$(du -sk "$dir" 2>/dev/null | cut -f1 | awk '{print $1 * 1024}')
+                if [[ $size -gt 10485760 ]]; then  # > 10MB
+                    echo -e "  ${YELLOW}[!]${NC} Cache do ${name}: $(format_size $size) (ainda presente)"
+                    issues=$((issues + 1))
+                else
+                    echo -e "  ${GREEN}[✓]${NC} Cache do ${name}: $(format_size $size)"
+                fi
+            fi
+        done
+
+        # Verifica caches do Serena (projetos + logs)
+        local serena_remaining=0
+        while IFS= read -r serena_cache; do
+            serena_remaining=$((serena_remaining + 1))
+        done < <(find "$TARGET_DIR" -maxdepth 3 -type d -path "*/.serena/cache" -not -empty 2>/dev/null)
+        if [[ $serena_remaining -eq 0 ]]; then
+            echo -e "  ${GREEN}[✓]${NC} Cache do Serena: limpo"
+        else
+            echo -e "  ${YELLOW}[!]${NC} Cache do Serena: ${serena_remaining} projeto(s) ainda com cache"
+            issues=$((issues + 1))
+        fi
+        echo ""
+    fi
+
+    # Resultado final
+    echo -e "${BOLD}===================================================${NC}"
+    if [[ $issues -eq 0 ]]; then
+        echo -e "${GREEN}${BOLD}  Tudo limpo! Nenhum problema encontrado.${NC}"
+    else
+        echo -e "${YELLOW}${BOLD}  ${issues} item(s) com atenção — verifique acima.${NC}"
+    fi
+    echo -e "${BOLD}===================================================${NC}"
+    echo ""
 }
 
 # Função para exibir header
@@ -383,3 +701,10 @@ echo -e "${CYAN}Para reinstalar dependências em um projeto:${NC}"
 echo -e "  ${YELLOW}cd $TARGET_DIR/nome-do-projeto${NC}"
 echo -e "  ${YELLOW}npm install${NC}  ${CYAN}(ou pnpm install, ou yarn install)${NC}"
 echo ""
+
+# Verificação pós-limpeza
+verify_cleanup
+
+echo "" >> "$LOG_FILE"
+echo "=== VERIFICAÇÃO ===" >> "$LOG_FILE"
+echo "Verificação pós-limpeza concluída" >> "$LOG_FILE"
